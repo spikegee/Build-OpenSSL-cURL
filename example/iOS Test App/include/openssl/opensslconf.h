@@ -39,14 +39,8 @@ extern "C" {
 #ifndef OPENSSL_RAND_SEED_OS
 # define OPENSSL_RAND_SEED_OS
 #endif
-#ifndef OPENSSL_NO_AFALGENG
-# define OPENSSL_NO_AFALGENG
-#endif
 #ifndef OPENSSL_NO_ASAN
 # define OPENSSL_NO_ASAN
-#endif
-#ifndef OPENSSL_NO_ASYNC
-# define OPENSSL_NO_ASYNC
 #endif
 #ifndef OPENSSL_NO_CRYPTO_MDEBUG
 # define OPENSSL_NO_CRYPTO_MDEBUG
@@ -101,6 +95,9 @@ extern "C" {
 #endif
 #ifndef OPENSSL_NO_DYNAMIC_ENGINE
 # define OPENSSL_NO_DYNAMIC_ENGINE
+#endif
+#ifndef OPENSSL_NO_AFALGENG
+# define OPENSSL_NO_AFALGENG
 #endif
 
 

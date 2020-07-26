@@ -1,0 +1,15 @@
+archive/
+*.tar.gz
+curl/include
+curl/lib
+nghttp2/iOS
+nghttp2/Mac
+nghttp2/tvOS
+nghttp2/lib
+openssl/iOS
+openssl/Mac
+openssl/tvOS
+curl/curl-*/
+curl-*/
+openssl/openssl-*/
+example/iOS Test App/include/

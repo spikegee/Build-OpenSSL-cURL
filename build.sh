@@ -13,6 +13,9 @@
 OPENSSL="1.1.1g"	# https://www.openssl.org/source/
 LIBCURL="7.71.1"	# https://curl.haxx.se/download.html
 NGHTTP2="1.41.0"	# https://nghttp2.org/
+IOS_SDK_VERSION=$(xcrun --sdk iphoneos --show-sdk-version)
+TVOS_SDK_VERSION=$(xcrun --sdk appletvos --show-sdk-version)
+BUILD_LIST=("Mac-x86_64" "iOS-armv7" "iOS-armv7s" "iOS-arm64" "iOS-arm64e" "iOS-x86_64" "iOS-i386" "tvOS-arm64" "tvOS-x86_64")
 
 ################################################
 
@@ -46,6 +49,9 @@ usage ()
 	echo "         -o <version>   Build OpenSSL version (default $OPENSSL)"
 	echo "         -c <version>   Build curl version (default $LIBCURL)"
 	echo "         -n <version>   Build nghttp2 version (default $NGHTTP2)"
+	echo "         -s <version>   iOS SDK version (default $IOS_SDK_VERSION)"
+	echo "         -t <version>   tvOS SDK version (default $TVOS_SDK_VERSION)"
+	echo "         -l             space separated list to restrict targets to build: eg. \"iOS-arm64 iOS-x86_64 tvOS-armV7 Mac-arm64\""
 	echo "         -d             Compile without HTTP2 support"
 	echo "         -e             Compile with OpenSSL engine support"
 	echo "         -b             Compile without bitcode"
@@ -55,7 +61,7 @@ usage ()
     exit 127
 }
 
-while getopts "o:c:n:debxh\?" o; do
+while getopts "o:c:n:s:t:l:debxh\?" o; do
     case "${o}" in
 		o)
 			OPENSSL="${OPTARG}"
@@ -66,6 +72,16 @@ while getopts "o:c:n:debxh\?" o; do
 		n)
 			NGHTTP2="${OPTARG}"
 			;;
+		s)
+			IOS_SDK_VERSION="${OPTARG}"
+			;;
+		t)
+			TVOS_SDK_VERSION="${OPTARG}"
+			;;
+		l)
+			BUILD_LIST=()
+	    	BUILD_LIST="${OPTARG}"
+            ;;
 		d)
 			buildnghttp2=""
 			;;
@@ -101,7 +117,7 @@ echo
 echo
 cd openssl 
 echo -e "${bold}Building OpenSSL${normal}"
-./openssl-build.sh -v "$OPENSSL" $engine $colorflag
+./openssl-build.sh -v "$OPENSSL" $engine $colorflag -s "$IOS_SDK_VERSION" -t "$TVOS_SDK_VERSION" -l "$BUILD_LIST"
 cd ..
 
 ## Nghttp2 Build
@@ -111,7 +127,7 @@ else
 	echo
 	echo -e "${bold}Building nghttp2 for HTTP2 support${normal}"
 	cd nghttp2
-	./nghttp2-build.sh -v "$NGHTTP2" $colorflag
+	./nghttp2-build.sh -v "$NGHTTP2" $colorflag -s "$IOS_SDK_VERSION" -t "$TVOS_SDK_VERSION" -l "$BUILD_LIST"
 	cd ..
 fi
 
@@ -119,7 +135,7 @@ fi
 echo
 echo -e "${bold}Building Curl${normal}"
 cd curl
-./libcurl-build.sh -v "$LIBCURL" $disablebitcode $colorflag $buildnghttp2
+./libcurl-build.sh -v "$LIBCURL" $disablebitcode $colorflag $buildnghttp2 -s "$IOS_SDK_VERSION" -t "$TVOS_SDK_VERSION" -l "$BUILD_LIST"
 cd ..
 
 echo 

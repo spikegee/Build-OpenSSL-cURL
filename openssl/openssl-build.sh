@@ -39,23 +39,27 @@ alertdim="\033[0m${red}\033[2m"
 trap 'echo -e "${alert}** ERROR with Build - Check /tmp/openssl*.log${alertdim}"; tail -3 /tmp/openssl*.log' INT TERM EXIT
 
 OPENSSL_VERSION="openssl-1.1.1d"
-IOS_MIN_SDK_VERSION="7.1"
-IOS_SDK_VERSION=""
-TVOS_MIN_SDK_VERSION="9.0"
-TVOS_SDK_VERSION=""
+IOS_SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version)"
+TVOS_SDK_VERSION="$(xcrun --sdk appletvos --show-sdk-version)"
+MIN_IOS_VERSION="11.0"
+MIN_TVOS_VERSION="11.0"
+BUILD_LIST=("Mac-x86_64" "iOS-armv7" "iOS-armv7s" "iOS-arm64" "iOS-arm64e" "iOS-x86_64" "iOS-i386" "tvOS-arm64" "tvOS-x86_64")
 
 usage ()
 {
 	echo
 	echo -e "${bold}Usage:${normal}"
 	echo
-	echo -e "  ${subbold}$0${normal} [-v ${dim}<openssl version>${normal}] [-s ${dim}<iOS SDK version>${normal}] [-t ${dim}<tvOS SDK version>${normal}] [-e] [-x] [-h]"
+	echo -e "  ${subbold}$0${normal} [-v ${dim}<openssl version>${normal}] [-s ${dim}<iOS SDK version>${normal}] [-t ${dim}<tvOS SDK version>${normal}] [-l ${dim}<Restricted arch list>${normal}] [-e] [-x] [-h]"
 	echo
 	echo "         -v   version of OpenSSL (default $OPENSSL_VERSION)"
-	echo "         -s   iOS SDK version (default $IOS_MIN_SDK_VERSION)"
-	echo "         -t   tvOS SDK version (default $TVOS_MIN_SDK_VERSION)"
+	echo "         -s   iOS SDK version (default $IOS_SDK_VERSION)"
+	echo "         -t   tvOS SDK version (default $TVOS_SDK_VERSION)"
+	echo "         -i   iPhone target version (default $MIN_IOS_VERSION)"
+	echo "         -j   AppleTV target version (default $MIN_TVOS_VERSION)"
 	echo "         -e   compile with engine support"	
 	echo "         -x   disable color output"
+	echo "         -l   space separated list to restrict targets to build: eg. \"iOS-arm64 iOS-x86_64 tvOS-armV7 Mac-arm64\""
 	echo "         -h   show usage"	
 	echo
 	trap - INT TERM EXIT
@@ -64,7 +68,7 @@ usage ()
 
 engine=0
 
-while getopts "v:s:t:exh\?" o; do
+while getopts "v:s:t:l:i:j:exh\?" o; do
     case "${o}" in
         v)
 	    	OPENSSL_VERSION="openssl-${OPTARG}"
@@ -74,6 +78,16 @@ while getopts "v:s:t:exh\?" o; do
             ;;
         t)
 	    	TVOS_SDK_VERSION="${OPTARG}"
+            ;;
+		l)
+			BUILD_LIST=()
+	    	BUILD_LIST="${OPTARG}"
+            ;;
+		i)
+	    	MIN_IOS_VERSION="${OPTARG}"
+            ;;
+		j)
+	    	MIN_TVOS_VERSION="${OPTARG}"
             ;;
 		e)
             engine=1
@@ -95,6 +109,27 @@ done
 shift $((OPTIND-1))
 
 DEVELOPER=`xcode-select -print-path`
+
+getArchitectureToBuild()
+{
+	local CURRENT_OS=$1
+	# be case insensitive for OS name
+	CURRENT_OS=$(echo $CURRENT_OS | tr '[:lower:]' '[:upper:]')
+	local __resultOutput=$2
+	local __resultVariable=()
+	for OS_ARCH in ${BUILD_LIST[@]}; do
+		IFS='-' && read -ra TOKENS <<< "$OS_ARCH" && unset IFS
+		local OS=${TOKENS[0]}
+		OS=$(echo $OS | tr '[:lower:]' '[:upper:]')
+		local ARCH=${TOKENS[1]}
+		if [ "$OS" != "$CURRENT_OS" ]; then
+			continue
+		fi
+		__resultVariable+=("$ARCH")
+	done
+	# return array as a space separated string
+	eval $__resultOutput="'${__resultVariable[@]}'"
+}
 
 buildMac()
 {
@@ -167,9 +202,9 @@ buildIOS()
 	fi
 	# add -isysroot to CC=
 	if [[ "$OPENSSL_VERSION" = "openssl-1.1.1"* ]]; then
-		sed -ie "s!^CFLAGS=!CFLAGS=-isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} -miphoneos-version-min=${IOS_MIN_SDK_VERSION} !" "Makefile"
+		sed -ie "s!^CFLAGS=!CFLAGS=-isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} -miphoneos-version-min=${MIN_IOS_VERSION} !" "Makefile"
 	else
-		sed -ie "s!^CFLAG=!CFLAG=-isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} -miphoneos-version-min=${IOS_MIN_SDK_VERSION} !" "Makefile"
+		sed -ie "s!^CFLAG=!CFLAG=-isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} -miphoneos-version-min=${MIN_IOS_VERSION} !" "Makefile"
 	fi
 
 	make >> "/tmp/${OPENSSL_VERSION}-iOS-${ARCH}.log" 2>&1
@@ -230,9 +265,9 @@ buildTVOS()
 	fi
 	# add -isysroot to CC=
 	if [[ "$OPENSSL_VERSION" = "openssl-1.1.1"* ]]; then
-		sed -ie "s!^CFLAGS=!CFLAGS=-isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} -mtvos-version-min=${TVOS_MIN_SDK_VERSION} !" "Makefile"
+		sed -ie "s!^CFLAGS=!CFLAGS=-isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} -mtvos-version-min=${MIN_TVOS_VERSION} !" "Makefile"
 	else
-		sed -ie "s!^CFLAG=!CFLAG=-isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} -mtvos-version-min=${TVOS_MIN_SDK_VERSION} !" "Makefile"
+		sed -ie "s!^CFLAG=!CFLAG=-isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} -mtvos-version-min=${MIN_TVOS_VERSION} !" "Makefile"
 	fi
 
 	make >> "/tmp/${OPENSSL_VERSION}-tvOS-${ARCH}.log" 2>&1
@@ -283,65 +318,81 @@ if [ "$engine" == "1" ]; then
 	sed -ie 's/\"engine/\"dynamic-engine/' ${OPENSSL_VERSION}/Configurations/15-ios.conf
 fi
 
-echo -e "${bold}Building Mac libraries${dim}"
-buildMac "x86_64"
 
-echo "  Copying headers and libraries"
-cp /tmp/${OPENSSL_VERSION}-x86_64/include/openssl/* Mac/include/openssl/
+getArchitectureToBuild "Mac" MACOS_ARCHS
+read -ra MACOS_ARCHS <<< "$MACOS_ARCHS"
+if [[ "${#MACOS_ARCHS[@]}" -gt 0 ]]; then
+	echo -e "${bold}Building Mac libraries for architecture: ${MACOS_ARCHS[@]}${dim}"
+	ARCH_FILES_CYPTO=()
+	ARCH_FILES_SSL=()
+	for ARCH in "${MACOS_ARCHS[@]}"; do
+		buildMac "$ARCH"
+		ARCH_FILES_CYPTO+=("/tmp/${OPENSSL_VERSION}-$ARCH/lib/libcrypto.a")
+		ARCH_FILES_SSL+=("/tmp/${OPENSSL_VERSION}-$ARCH/lib/libssl.a")
+	done
 
-lipo \
-	"/tmp/${OPENSSL_VERSION}-x86_64/lib/libcrypto.a" \
-	-create -output Mac/lib/libcrypto.a
+	echo "  Copying headers and libraries"
+	cp /tmp/${OPENSSL_VERSION}-${MACOS_ARCHS[0]}/include/openssl/* Mac/include/openssl/
 
-lipo \
-	"/tmp/${OPENSSL_VERSION}-x86_64/lib/libssl.a" \
-	-create -output Mac/lib/libssl.a
+	echo "Lipoing ${ARCH_FILES_CYPTO[@]}"
+	lipo \
+		"${ARCH_FILES_CYPTO[@]}" \
+		-create -output "Mac/lib/libcrypto.a"
+	echo "Lipoing ${ARCH_FILES_SSL[@]}"
+	lipo \
+		"${ARCH_FILES_SSL[@]}" \
+		-create -output "Mac/lib/libssl.a"
+fi
 
-echo -e "${bold}Building iOS libraries${dim}"
-buildIOS "armv7"
-buildIOS "armv7s"
-buildIOS "arm64"
-buildIOS "arm64e"
-buildIOS "i386"
-buildIOS "x86_64"
+getArchitectureToBuild "iOS" IOS_ARCHS
+read -ra IOS_ARCHS <<< "$IOS_ARCHS"
+if [[ "${#IOS_ARCHS[@]}" -gt 0 ]]; then
+	echo -e "${bold}Building iOS libraries for architecture: ${IOS_ARCHS[@]}${dim}"
+	ARCH_FILES_CYPTO=()
+	ARCH_FILES_SSL=()
+	for ARCH in "${IOS_ARCHS[@]}"; do
+		buildIOS "$ARCH"
+		ARCH_FILES_CYPTO+=("/tmp/${OPENSSL_VERSION}-iOS-$ARCH/lib/libcrypto.a")
+		ARCH_FILES_SSL+=("/tmp/${OPENSSL_VERSION}-iOS-$ARCH/lib/libssl.a")
+	done
 
-echo "  Copying headers and libraries"
-cp /tmp/${OPENSSL_VERSION}-iOS-arm64/include/openssl/* iOS/include/openssl/
+	echo "  Copying headers and libraries"
+	cp /tmp/${OPENSSL_VERSION}-iOS-${IOS_ARCHS[0]}/include/openssl/* iOS/include/openssl/
 
-lipo \
-	"/tmp/${OPENSSL_VERSION}-iOS-armv7/lib/libcrypto.a" \
-	"/tmp/${OPENSSL_VERSION}-iOS-armv7s/lib/libcrypto.a" \
-	"/tmp/${OPENSSL_VERSION}-iOS-i386/lib/libcrypto.a" \
-	"/tmp/${OPENSSL_VERSION}-iOS-arm64/lib/libcrypto.a" \
-	"/tmp/${OPENSSL_VERSION}-iOS-arm64e/lib/libcrypto.a" \
-	"/tmp/${OPENSSL_VERSION}-iOS-x86_64/lib/libcrypto.a" \
-	-create -output iOS/lib/libcrypto.a
+	echo "Lipoing ${ARCH_FILES_CYPTO[@]}"
+	lipo \
+		"${ARCH_FILES_CYPTO[@]}" \
+		-create -output "iOS/lib/libcrypto.a"
+	echo "Lipoing ${ARCH_FILES_SSL[@]}"
+	lipo \
+		"${ARCH_FILES_SSL[@]}" \
+		-create -output "iOS/lib/libssl.a"
+fi
 
-lipo \
-	"/tmp/${OPENSSL_VERSION}-iOS-armv7/lib/libssl.a" \
-	"/tmp/${OPENSSL_VERSION}-iOS-armv7s/lib/libssl.a" \
-	"/tmp/${OPENSSL_VERSION}-iOS-i386/lib/libssl.a" \
-	"/tmp/${OPENSSL_VERSION}-iOS-arm64/lib/libssl.a" \
-	"/tmp/${OPENSSL_VERSION}-iOS-arm64e/lib/libssl.a" \
-	"/tmp/${OPENSSL_VERSION}-iOS-x86_64/lib/libssl.a" \
-	-create -output iOS/lib/libssl.a
+getArchitectureToBuild "tvOS" TVOS_ARCHS
+read -ra TVOS_ARCHS <<< "$TVOS_ARCHS"
+if [[ "${#TVOS_ARCHS[@]}" -gt 0 ]]; then
+	echo -e "${bold}Building tvOS libraries for architecture: ${TVOS_ARCHS[@]}${dim}"
+	ARCH_FILES_CYPTO=()
+	ARCH_FILES_SSL=()
+	for ARCH in "${TVOS_ARCHS[@]}"; do
+		buildTVOS "$ARCH"
+		ARCH_FILES_CYPTO+=("/tmp/${OPENSSL_VERSION}-tvOS-$ARCH/lib/libcrypto.a")
+		ARCH_FILES_SSL+=("/tmp/${OPENSSL_VERSION}-tvOS-$ARCH/lib/libssl.a")
+	done
 
+	echo "  Copying headers and libraries"
+	cp /tmp/${OPENSSL_VERSION}-tvOS-${TVOS_ARCHS[0]}/include/openssl/* tvOS/include/openssl/
 
-echo -e "${bold}Building tvOS libraries${dim}"
-buildTVOS "arm64"
-buildTVOS "x86_64"
-echo "  Copying headers and libraries"
-cp /tmp/${OPENSSL_VERSION}-tvOS-arm64/include/openssl/* tvOS/include/openssl/
-
-lipo \
-	"/tmp/${OPENSSL_VERSION}-tvOS-arm64/lib/libcrypto.a" \
-	"/tmp/${OPENSSL_VERSION}-tvOS-x86_64/lib/libcrypto.a" \
-	-create -output tvOS/lib/libcrypto.a
-
-lipo \
-	"/tmp/${OPENSSL_VERSION}-tvOS-arm64/lib/libssl.a" \
-	"/tmp/${OPENSSL_VERSION}-tvOS-x86_64/lib/libssl.a" \
-	-create -output tvOS/lib/libssl.a
+	echo "Lipoing ${ARCH_FILES_CYPTO[@]}"
+	lipo \
+		"${ARCH_FILES_CYPTO[@]}" \
+		-create -output "tvOS/lib/libcrypto.a"
+	echo "Lipoing ${ARCH_FILES_SSL[@]}"
+	lipo \
+		"${ARCH_FILES_SSL[@]}" \
+		-create -output "tvOS/lib/libssl.a"
+fi
 
 echo -e "${bold}Cleaning up${dim}"
 rm -rf /tmp/${OPENSSL_VERSION}-*

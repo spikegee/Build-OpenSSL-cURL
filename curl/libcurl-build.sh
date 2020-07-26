@@ -13,6 +13,8 @@
 # Preston Jennings
 #   https://github.com/prestonj/Build-OpenSSL-cURL 
 
+
+
 set -e
 
 # Formatting
@@ -34,34 +36,36 @@ alertdim="\033[0m${red}\033[2m"
 trap 'echo -e "${alert}** ERROR with Build - Check /tmp/curl*.log${alertdim}"; tail -3 /tmp/curl*.log' INT TERM EXIT
 
 CURL_VERSION="curl-7.50.1"
-IOS_SDK_VERSION="" 
-IOS_MIN_SDK_VERSION="7.1"
-TVOS_SDK_VERSION="" 
-TVOS_MIN_SDK_VERSION="9.0"
-IPHONEOS_DEPLOYMENT_TARGET="6.0"
+IOS_SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version)"
+TVOS_SDK_VERSION="$(xcrun --sdk appletvos --show-sdk-version)"
+MIN_IOS_VERSION="11.0"
+MIN_TVOS_VERSION="11.0"
 nohttp2="0"
+BUILD_LIST=("Mac-x86_64" "iOS-armv7" "iOS-armv7s" "iOS-arm64" "iOS-arm64e" "iOS-x86_64" "iOS-i386" "tvOS-arm64" "tvOS-x86_64")
 
 usage ()
 {
 	echo
 	echo -e "${bold}Usage:${normal}"
 	echo
-	echo -e "  ${subbold}$0${normal} [-v ${dim}<curl version>${normal}] [-s ${dim}<iOS SDK version>${normal}] [-t ${dim}<tvOS SDK version>${normal}] [-i ${dim}<iPhone target version>${normal}] [-b] [-x] [-n] [-h]"
+	echo -e "  ${subbold}$0${normal} [-v ${dim}<curl version>${normal}] [-s ${dim}<iOS SDK version>${normal}] [-t ${dim}<tvOS SDK version>${normal}] [-i ${dim}<iPhone target version>${normal}] [-l ${dim}<Restricted arch list>${normal}] [-b] [-x] [-n] [-h]"
     echo
 	echo "         -v   version of curl (default $CURL_VERSION)"
-	echo "         -s   iOS SDK version (default $IOS_MIN_SDK_VERSION)"
-	echo "         -t   tvOS SDK version (default $TVOS_MIN_SDK_VERSION)"
-	echo "         -i   iPhone target version (default $IPHONEOS_DEPLOYMENT_TARGET)"
+	echo "         -s   iOS SDK version (default $IOS_SDK_VERSION)"
+	echo "         -t   tvOS SDK version (default $TVOS_SDK_VERSION)"
+	echo "         -i   iPhone target version (default $MIN_IOS_VERSION)"
+	echo "         -j   AppleTV target version (default $MIN_TVOS_VERSION)"
 	echo "         -b   compile without bitcode"
 	echo "         -n   compile with nghttp2"
 	echo "         -x   disable color output"
+	echo "         -l   space separated list to restrict targets to build: eg. \"iOS-arm64 iOS-x86_64 tvOS-armV7 Mac-arm64\""
 	echo "         -h   show usage"	
 	echo
 	trap - INT TERM EXIT
 	exit 127
 }
 
-while getopts "v:s:t:i:nbxh\?" o; do
+while getopts "v:s:t:l:i:j:nbxh\?" o; do
     case "${o}" in
         v)
 			CURL_VERSION="curl-${OPTARG}"
@@ -72,8 +76,15 @@ while getopts "v:s:t:i:nbxh\?" o; do
         t)
 	    	TVOS_SDK_VERSION="${OPTARG}"
             ;;
+		l)
+			BUILD_LIST=()
+	    	BUILD_LIST="${OPTARG}"
+            ;;
         i)
-	    	IPHONEOS_DEPLOYMENT_TARGET="${OPTARG}"
+	    	MIN_IOS_VERSION="${OPTARG}"
+            ;;
+		j)
+	    	MIN_TVOS_VERSION="${OPTARG}"
             ;;
 		n)
 			nohttp2="1"
@@ -114,6 +125,27 @@ else
 	NGHTTP2LIB=""
 fi
 
+getArchitectureToBuild()
+{
+	local CURRENT_OS=$1
+	# be case insensitive for OS name
+	CURRENT_OS=$(echo $CURRENT_OS | tr '[:lower:]' '[:upper:]')
+	local __resultOutput=$2
+	local __resultVariable=()
+	for OS_ARCH in ${BUILD_LIST[@]}; do
+		IFS='-' && read -ra TOKENS <<< "$OS_ARCH" && unset IFS
+		local OS=${TOKENS[0]}
+		OS=$(echo $OS | tr '[:lower:]' '[:upper:]')
+		local ARCH=${TOKENS[1]}
+		if [ "$OS" != "$CURRENT_OS" ]; then
+			continue
+		fi
+		__resultVariable+=("$ARCH")
+	done
+	# return array as a space separated string
+	eval $__resultOutput="'${__resultVariable[@]}'"
+}
+
 buildMac()
 {
 	ARCH=$1
@@ -132,7 +164,7 @@ buildMac()
 		NGHTTP2LIB="-L${NGHTTP2}/Mac/${ARCH}/lib"
 	fi
 	
-	export CC="${BUILD_TOOLS}/usr/bin/clang"
+	# export CC="${BUILD_TOOLS}/usr/bin/clang"
 	export CFLAGS="-arch ${ARCH} -pipe -Os -gdwarf-2 -fembed-bitcode"
 	export LDFLAGS="-arch ${ARCH} -L${OPENSSL}/Mac/lib ${NGHTTP2LIB}"
 	pushd . > /dev/null
@@ -177,15 +209,18 @@ buildIOS()
 	export CROSS_SDK="${PLATFORM}${IOS_SDK_VERSION}.sdk"
 	export BUILD_TOOLS="${DEVELOPER}"
 	export CC="${BUILD_TOOLS}/usr/bin/gcc"
-	export CFLAGS="-arch ${ARCH} -pipe -Os -gdwarf-2 -isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} -miphoneos-version-min=${IOS_MIN_SDK_VERSION} ${CC_BITCODE_FLAG}"
+	export CFLAGS="-arch ${ARCH} -pipe -Os -gdwarf-2 -isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} -miphoneos-version-min=${MIN_IOS_VERSION} ${CC_BITCODE_FLAG}"
 	export LDFLAGS="-arch ${ARCH} -isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} -L${OPENSSL}/iOS/lib ${NGHTTP2LIB}"
+
+	BUILD_STATIC="--disable-shared --enable-static"
+	#BUILD_STATIC=
    
 	echo -e "${subbold}Building ${CURL_VERSION} for ${PLATFORM} ${IOS_SDK_VERSION} ${archbold}${ARCH}${dim} ${BITCODE}"
 
 	if [[ "${ARCH}" == *"arm64"* || "${ARCH}" == "arm64e" ]]; then
-		./configure -prefix="/tmp/${CURL_VERSION}-iOS-${ARCH}-${BITCODE}" --disable-shared --enable-static -with-random=/dev/urandom --with-ssl=${OPENSSL}/iOS ${NGHTTP2CFG} --host="arm-apple-darwin" &> "/tmp/${CURL_VERSION}-iOS-${ARCH}-${BITCODE}.log"
+		./configure -prefix="/tmp/${CURL_VERSION}-iOS-${ARCH}-${BITCODE}" $BUILD_STATIC -with-random=/dev/urandom --with-ssl=${OPENSSL}/iOS ${NGHTTP2CFG} --host="arm-apple-darwin" &> "/tmp/${CURL_VERSION}-iOS-${ARCH}-${BITCODE}.log"
 	else
-		./configure -prefix="/tmp/${CURL_VERSION}-iOS-${ARCH}-${BITCODE}" --disable-shared --enable-static -with-random=/dev/urandom --with-ssl=${OPENSSL}/iOS ${NGHTTP2CFG} --host="${ARCH}-apple-darwin" &> "/tmp/${CURL_VERSION}-iOS-${ARCH}-${BITCODE}.log"
+		./configure -prefix="/tmp/${CURL_VERSION}-iOS-${ARCH}-${BITCODE}" $BUILD_STATIC -with-random=/dev/urandom --with-ssl=${OPENSSL}/iOS ${NGHTTP2CFG} --host="${ARCH}-apple-darwin" &> "/tmp/${CURL_VERSION}-iOS-${ARCH}-${BITCODE}.log"
 	fi
 
 	make -j8 >> "/tmp/${CURL_VERSION}-iOS-${ARCH}-${BITCODE}.log" 2>&1
@@ -217,7 +252,7 @@ buildTVOS()
 	export CROSS_SDK="${PLATFORM}${TVOS_SDK_VERSION}.sdk"
 	export BUILD_TOOLS="${DEVELOPER}"
 	export CC="${BUILD_TOOLS}/usr/bin/gcc"
-	export CFLAGS="-arch ${ARCH} -pipe -Os -gdwarf-2 -isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} -mtvos-version-min=${TVOS_MIN_SDK_VERSION} -fembed-bitcode"
+	export CFLAGS="-arch ${ARCH} -pipe -Os -gdwarf-2 -isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} -mtvos-version-min=${MIN_TVOS_VERSION} -fembed-bitcode"
 	export LDFLAGS="-arch ${ARCH} -isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} -L${OPENSSL}/tvOS/lib ${NGHTTP2LIB}"
 #	export PKG_CONFIG_PATH 
    
@@ -256,63 +291,79 @@ fi
 echo "Unpacking curl"
 tar xfz "${CURL_VERSION}.tar.gz"
 
-echo -e "${bold}Building Mac libraries${dim}"
-buildMac "x86_64"
-
-echo "  Copying headers"
-cp /tmp/${CURL_VERSION}-x86_64/include/curl/* include/curl/
-
-lipo \
-	"/tmp/${CURL_VERSION}-x86_64/lib/libcurl.a" \
-	-create -output lib/libcurl_Mac.a
-
-echo -e "${bold}Building iOS libraries (bitcode)${dim}"
-buildIOS "armv7" "bitcode"
-buildIOS "armv7s" "bitcode"
-buildIOS "arm64" "bitcode"
-buildIOS "arm64e" "bitcode"
-buildIOS "x86_64" "bitcode"
-buildIOS "i386" "bitcode"
-
-lipo \
-	"/tmp/${CURL_VERSION}-iOS-armv7-bitcode/lib/libcurl.a" \
-	"/tmp/${CURL_VERSION}-iOS-armv7s-bitcode/lib/libcurl.a" \
-	"/tmp/${CURL_VERSION}-iOS-i386-bitcode/lib/libcurl.a" \
-	"/tmp/${CURL_VERSION}-iOS-arm64-bitcode/lib/libcurl.a" \
-	"/tmp/${CURL_VERSION}-iOS-arm64e-bitcode/lib/libcurl.a" \
-	"/tmp/${CURL_VERSION}-iOS-x86_64-bitcode/lib/libcurl.a" \
-	-create -output lib/libcurl_iOS.a
-
-
-if [[ "${NOBITCODE}" == "yes" ]]; then
-	echo -e "${bold}Building iOS libraries (nobitcode)${dim}"
-	buildIOS "armv7" "nobitcode"
-	buildIOS "armv7s" "nobitcode"
-	buildIOS "arm64" "nobitcode"
-	buildIOS "arm64e" "nobitcode"
-	buildIOS "x86_64" "nobitcode"
-	buildIOS "i386" "nobitcode"
-
+getArchitectureToBuild "Mac" MACOS_ARCHS
+read -ra MACOS_ARCHS <<< "$MACOS_ARCHS"
+if [[ "${#MACOS_ARCHS[@]}" -gt 0 ]]; then
+	echo -e "${bold}Building Mac libraries for architecture: ${MACOS_ARCHS[@]}${dim}"
+	ARCH_FILES=()
+	for ARCH in "${MACOS_ARCHS[@]}"; do
+		buildMac "$ARCH"
+		ARCH_FILES+=("/tmp/${CURL_VERSION}-$ARCH/lib/libcurl.a")
+	done
+	echo "Lipoing ${ARCH_FILES[@]}"
 	lipo \
-		"/tmp/${CURL_VERSION}-iOS-armv7-nobitcode/lib/libcurl.a" \
-		"/tmp/${CURL_VERSION}-iOS-armv7s-nobitcode/lib/libcurl.a" \
-		"/tmp/${CURL_VERSION}-iOS-i386-nobitcode/lib/libcurl.a" \
-		"/tmp/${CURL_VERSION}-iOS-arm64-nobitcode/lib/libcurl.a" \
-		"/tmp/${CURL_VERSION}-iOS-arm64e-nobitcode/lib/libcurl.a" \
-		"/tmp/${CURL_VERSION}-iOS-x86_64-nobitcode/lib/libcurl.a" \
-		-create -output lib/libcurl_iOS_nobitcode.a
-
+		"${ARCH_FILES[@]}" \
+		-create -output lib/libcurl_Mac.a
 fi
 
-echo -e "${bold}Building tvOS libraries${dim}"
-buildTVOS "arm64"
-buildTVOS "x86_64"
+getArchitectureToBuild "iOS" IOS_ARCHS
+read -ra IOS_ARCHS <<< "$IOS_ARCHS"
+if [[ "${#IOS_ARCHS[@]}" -gt 0 ]]; then
+	echo -e "${bold}Building iOS libraries (bitcode) for architecture: ${IOS_ARCHS[@]}${dim}"
+	ARCH_FILES=()
+	for ARCH in "${IOS_ARCHS[@]}"; do
+		buildIOS "$ARCH" "bitcode"
+		ARCH_FILES+=("/tmp/${CURL_VERSION}-iOS-$ARCH-bitcode/lib/libcurl.a")
+	done
+	echo "Lipoing ${ARCH_FILES[@]}"
+	lipo \
+		"${ARCH_FILES[@]}" \
+		-create -output lib/libcurl_iOS.a
 
-lipo \
-	"/tmp/${CURL_VERSION}-tvOS-arm64/lib/libcurl.a" \
-	"/tmp/${CURL_VERSION}-tvOS-x86_64/lib/libcurl.a" \
-	-create -output lib/libcurl_tvOS.a
+	if [[ "${NOBITCODE}" == "yes" ]]; then
+		echo -e "${bold}Building iOS libraries (nobitcode) for architecture: ${IOS_ARCHS[@]}${dim}"
+		ARCH_FILES=()
+		for ARCH in "${IOS_ARCHS[@]}"; do
+			buildIOS "$ARCH" "nobitcode"
+			ARCH_FILES+=("/tmp/${CURL_VERSION}-iOS-$ARCH-nobitcode/lib/libcurl.a")
+		done
+		echo "Lipoing ${ARCH_FILES[@]}"
+		lipo \
+			"${ARCH_FILES[@]}" \
+			-create -output lib/libcurl_iOS_nobitcode.a
+	fi
+fi
 
+getArchitectureToBuild "tvOS" TVOS_ARCHS
+read -ra TVOS_ARCHS <<< "$TVOS_ARCHS"
+if [[ "${#TVOS_ARCHS[@]}" -gt 0 ]]; then
+	echo -e "${bold}Building tvOS libraries for architecture: ${TVOS_ARCHS[@]}${dim}"
+	ARCH_FILES=()
+	for ARCH in "${TVOS_ARCHS[@]}"; do
+		buildTVOS "$ARCH"
+		ARCH_FILES+=("/tmp/${CURL_VERSION}-tvOS-$ARCH/lib/libcurl.a")
+	done
+	echo "Lipoing ${ARCH_FILES[@]}"
+	lipo \
+		"${ARCH_FILES[@]}" \
+		-create -output lib/libcurl_tvOS.a
+fi
+
+echo "  Copying headers"
+# take the first build from any of the three OSes
+if [[ ! "${#MACOS_ARCHS[@]}" -eq 0 ]]; then
+    echo "Copying headers from Mac ${MACOS_ARCHS[0]}"
+	cp /tmp/${CURL_VERSION}-${MACOS_ARCHS[0]}/include/curl/* include/curl/
+elif [[ ! "${#IOS_ARCHS[@]}" -eq 0 ]]; then
+	echo "Copying headers from iOS ${IOS_ARCHS[0]}"
+	cp /tmp/${CURL_VERSION}-iOS-${IOS_ARCHS[0]}-bitcode/include/curl/* include/curl/
+elif [[ ! "${#TVOS_ARCHS[@]}" -eq 0 ]]; then
+	echo "Copying headers from tvOS ${TVOS_ARCHS[0]}"
+	cp /tmp/${CURL_VERSION}-tvOS-${TVOS_ARCHS[0]}/include/curl/* include/curl/
+else
+	echo "ERROR: No headers to copy from!"
+	exit
+fi
 
 echo -e "${bold}Cleaning up${dim}"
 rm -rf /tmp/${CURL_VERSION}-*
